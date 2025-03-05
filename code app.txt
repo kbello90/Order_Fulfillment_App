@@ -1,0 +1,135 @@
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+
+# Load Data
+file_path = "order_fulfillment_dashboard_updated.xlsx"
+xls = pd.ExcelFile(file_path)
+fact_sales_df = pd.read_excel(xls, sheet_name="FactSales")
+
+# Ensure Date column is in datetime format
+fact_sales_df["Date"] = pd.to_datetime(fact_sales_df["Date"], errors='coerce')
+
+# Drop rows with missing dates to avoid KeyError
+fact_sales_df = fact_sales_df.dropna(subset=["Date"])
+
+# Define color palette
+colors = ["#00A6FB", "#0582CA", "#006494", "#003554", "#051923"]
+
+# Extract Month from Date
+fact_sales_df["Month"] = fact_sales_df["Date"].dt.to_period("M").astype(str)
+
+# Sidebar Navigation
+st.sidebar.title("📊 Order Fulfillment Dashboard")
+page = st.sidebar.radio("Select a Page:", ["Overview", "Sales Analysis", "Order Fulfillment", "Monthly Metrics", "KPI Analysis", "Moving Average", "Forecasting", "Download Reports"])
+
+if page == "Overview":
+    st.title("📈 Dashboard Overview")
+    total_sales = fact_sales_df["TotalSales"].sum()
+    total_orders = fact_sales_df.shape[0]
+    avg_processing_time = fact_sales_df["ProcessingTime"].mean()
+    
+    col1, col2, col3 = st.columns(3)
+    col1.metric("💰 Total Sales", f"${total_sales:,.2f}")
+    col2.metric("📦 Total Orders", total_orders)
+    col3.metric("⏳ Avg Processing Time", f"{avg_processing_time:.1f} days")
+    
+    order_status_counts = fact_sales_df["OrderStatus"].value_counts()
+    fig = px.pie(order_status_counts, values=order_status_counts.values, names=order_status_counts.index,
+                 title="Order Status Distribution", color_discrete_sequence=colors)
+    st.plotly_chart(fig)
+    
+    # Monthly Order and Completion Analysis
+    monthly_orders = fact_sales_df.groupby("Month").agg({"SalesID": "count", "OrderStatus": lambda x: (x == "Completed").sum()}).reset_index()
+    monthly_orders.columns = ["Month", "Total Orders", "Completed Orders"]
+    
+    fig_bar = px.bar(monthly_orders, x="Month", y=["Completed Orders", "Total Orders"],
+                     title="Monthly Total Orders and Completed Orders", 
+                     color_discrete_sequence=[colors[3], colors[0]],
+                     labels={"value": "Count", "variable": "Order Type"})
+    st.plotly_chart(fig_bar)
+
+elif page == "Sales Analysis":
+    st.title("📊 Sales Trends")
+    sales_trend = fact_sales_df.groupby("Date")["TotalSales"].sum().reset_index()
+    fig = px.line(sales_trend, x="Date", y="TotalSales", title="Sales Trend Over Time", color_discrete_sequence=[colors[1]])
+    st.plotly_chart(fig)
+
+elif page == "Order Fulfillment":
+    st.title("📦 Order Fulfillment Analysis")
+    processing_time_dist = px.histogram(fact_sales_df, x="ProcessingTime", nbins=10, title="Processing Time Distribution", color_discrete_sequence=[colors[2]])
+    st.plotly_chart(processing_time_dist)
+
+elif page == "Monthly Metrics":
+    st.title("📊 Monthly Metrics")
+    
+    monthly_metrics = fact_sales_df.groupby("Month").agg({
+        "TotalSales": "sum", 
+        "ShippingCost": "sum", 
+        "QuantitySold": "sum"}).reset_index()
+    
+    st.dataframe(monthly_metrics)
+    
+    fig_sales = px.line(monthly_metrics, x="Month", y="TotalSales", title="Monthly Total Sales", color_discrete_sequence=[colors[0]])
+    st.plotly_chart(fig_sales)
+    
+    fig_shipping = px.line(monthly_metrics, x="Month", y="ShippingCost", title="Monthly Shipping Cost", color_discrete_sequence=[colors[1]])
+    st.plotly_chart(fig_shipping)
+    
+    fig_quantity = px.line(monthly_metrics, x="Month", y="QuantitySold", title="Monthly Quantity Sold", color_discrete_sequence=[colors[2]])
+    st.plotly_chart(fig_quantity)
+
+elif page == "KPI Analysis":
+    st.title("📊 KPI Analysis")
+    
+    total_orders = fact_sales_df.shape[0]
+    total_sales = fact_sales_df["TotalSales"].sum()
+    avg_processing_time = fact_sales_df["ProcessingTime"].mean()
+    cancellation_rate = (fact_sales_df["OrderStatus"].value_counts().get("Cancelled", 0) / total_orders) * 100
+    
+    kpi_col1, kpi_col2 = st.columns(2)
+    kpi_col1.metric("Avg Processing Time", f"{avg_processing_time:.1f} days")
+    kpi_col2.metric("Cancellation Rate", f"{cancellation_rate:.1f} %")
+    
+    # KPI by Warehouse
+    st.subheader("Processing Time by Warehouse")
+    warehouse_processing = fact_sales_df.groupby("WarehouseID")["ProcessingTime"].mean().reset_index()
+    if not warehouse_processing.empty:
+        fig_processing = px.bar(warehouse_processing, x="WarehouseID", y="ProcessingTime", 
+                                title="Avg Processing Time by Warehouse", color_discrete_sequence=[colors[1]])
+        st.plotly_chart(fig_processing)
+    else:
+        st.write("No data available for Processing Time by Warehouse.")
+    
+    st.subheader("Cancellation Rate by Warehouse")
+    warehouse_cancellations = fact_sales_df.groupby("WarehouseID")["OrderStatus"].apply(lambda x: (x == "Cancelled").mean() * 100).reset_index()
+    warehouse_cancellations.columns = ["WarehouseID", "Cancellation Rate"]
+    if not warehouse_cancellations.empty:
+        fig_cancellations = px.bar(warehouse_cancellations, x="WarehouseID", y="Cancellation Rate", 
+                                   title="Avg Cancellation Rate by Warehouse", color_discrete_sequence=[colors[2]])
+        st.plotly_chart(fig_cancellations)
+    else:
+        st.write("No data available for Cancellation Rate by Warehouse.")
+
+elif page == "Moving Average":
+    st.title("📊 Moving Average for Next 3 Months")
+    
+    sales_trend = fact_sales_df.groupby("Date")["TotalSales"].sum().reset_index()
+    sales_trend["Moving_Avg_3M"] = sales_trend["TotalSales"].rolling(window=3, min_periods=1).mean()
+    
+    fig = px.line(sales_trend, x="Date", y=["TotalSales", "Moving_Avg_3M"], 
+                  title="Moving Average (3 Months) vs. Total Sales", 
+                  labels={"value": "Sales", "variable": "Metric"}, 
+                  color_discrete_sequence=[colors[1], colors[3]])
+    st.plotly_chart(fig, use_container_width=True)
+
+elif page == "Forecasting":
+    st.title("🔮 Sales Forecast")
+    st.write("Coming Soon: Predicting future sales using AI models.")
+
+elif page == "Download Reports":
+    st.title("📥 Download Reports")
+    csv_data = fact_sales_df.to_csv(index=False).encode('utf-8')
+    st.download_button(label="Download CSV", data=csv_data, file_name="sales_report.csv", mime="text/csv")
+
+st.sidebar.write("Powered by Data Science 🚀")
